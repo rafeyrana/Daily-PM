@@ -1,11 +1,13 @@
 import sys
 import openai
 from datetime import datetime
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QTreeWidget, QTreeWidgetItem, QSplitter
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QTreeWidget, QTreeWidgetItem, QSplitter, QListWidget, QListWidgetItem
+from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QColor
 from dotenv import load_dotenv
 import os
 from utils.commit_utils import get_commit_history, parse_commits, get_commit_details, Commit
+from gui.animated_tree_widget_item import AnimatedTreeWidgetItem
 import json
 from PyQt5.QtWidgets import QMessageBox
 
@@ -25,10 +27,35 @@ class VirtualPMGUI(QMainWindow):
         # Left side: Chat interface
         chat_widget = QWidget()
         chat_layout = QVBoxLayout(chat_widget)
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = QListWidget()
+        self.chat_history.setStyleSheet("""
+            QListWidget {
+                background-color: #f0f0f0;
+                border: none;
+            }
+        """)
         self.chat_input = QLineEdit()
+        self.chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                border: 1px solid #ccc;
+                padding: 8px;
+                font-size: 14px;
+            }
+        """)
         self.send_button = QPushButton("Send")
+        self.send_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2E8B57;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #3CB371;
+            }
+        """)
         self.send_button.clicked.connect(self.send_message)
 
         chat_layout.addWidget(self.chat_history)
@@ -76,10 +103,39 @@ class VirtualPMGUI(QMainWindow):
         # Commit display
         self.commit_tree = QTreeWidget()
         self.commit_tree.setHeaderLabels(["Date", "Author", "Message"])
+        self.commit_tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: white;
+                border: none;
+                font-size: 14px;
+            }
+            QTreeWidget::item {
+                padding: 10px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #2E8B57;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #f0f0f0;
+                padding: 4px;
+                border: 1px solid #ddd;
+                font-size: 12px;
+            }
+        """)
         self.commit_tree.itemClicked.connect(self.show_commit_details)
         
         self.commit_details = QTextEdit()
         self.commit_details.setReadOnly(True)
+        self.commit_details.setStyleSheet("""
+            QTextEdit {
+                background-color: white;
+                border: none;
+                font-family: "Courier New", Courier, monospace;
+                font-size: 14px;
+                color: #333;
+            }
+        """)
 
         commit_splitter = QSplitter(Qt.Vertical)
         commit_splitter.addWidget(self.commit_tree)
@@ -104,9 +160,12 @@ class VirtualPMGUI(QMainWindow):
         main_splitter.addWidget(param_commit_widget)
         main_layout.addWidget(main_splitter)
 
+        # Set the initial sizes of the splitter panes
+        main_splitter.setSizes([400, 800])
+
     def send_message(self):
         query = self.chat_input.text()
-        self.chat_history.append(f"You: {query}")
+        self.add_chat_bubble(query, "user")
         self.chat_input.clear()
 
         response = openai.ChatCompletion.create(
@@ -117,8 +176,14 @@ class VirtualPMGUI(QMainWindow):
             ]
         )
 
-        parsed_info = eval(response.choices[0].message['content'])
-        self.chat_history.append(f"Assistant: I've parsed the following information:\n{parsed_info}")
+        parsed_info_str = response.choices[0].message['content']
+        self.add_chat_bubble(f"I've parsed the following information:\n{parsed_info_str}", "assistant")
+
+        try:
+            parsed_info = eval(parsed_info_str)
+        except:
+            parsed_info = {}
+
 
         self.owner_entry.setText(parsed_info.get('owner', ''))
         self.repo_entry.setText(parsed_info.get('repo', ''))
@@ -129,6 +194,44 @@ class VirtualPMGUI(QMainWindow):
         self.path_entry.setText(parsed_info.get('path', ''))
 
         self.fetch_commits_from_params()
+
+    def add_chat_bubble(self, text, role):
+        item = QListWidgetItem()
+        bubble = QLabel(text)
+        bubble.setWordWrap(True)
+
+        if role == "user":
+            bubble.setStyleSheet("""
+                QLabel {
+                    background-color: #2E8B57;
+                    color: white;
+                    padding: 10px;
+                    border-radius: 15px;
+                }
+            """)
+            item.setTextAlignment(Qt.AlignRight)
+        else:
+            bubble.setStyleSheet("""
+                QLabel {
+                    background-color: white;
+                    color: black;
+                    padding: 10px;
+                    border-radius: 15px;
+                }
+            """)
+            item.setTextAlignment(Qt.AlignLeft)
+
+        self.chat_history.addItem(item)
+        self.chat_history.setItemWidget(item, bubble)
+        item.setSizeHint(bubble.sizeHint())
+
+        # Add fade-in animation
+        animation = QPropertyAnimation(bubble, b"windowOpacity")
+        animation.setDuration(500)
+        animation.setStartValue(0)
+        animation.setEndValue(1)
+        animation.setEasingCurve(QEasingCurve.InQuad)
+        animation.start()
 
     def fetch_commits_from_params(self):
         owner = self.owner_entry.text()
@@ -249,11 +352,27 @@ class VirtualPMGUI(QMainWindow):
             item.setText(1, c.author_name)
             item.setText(2, c.message)
             item.setData(0, Qt.UserRole, c.sha)
+            # Store the animated item as an attribute of the item
+            item.animated_item = AnimatedTreeWidgetItem(item)
 
     def show_commit_details(self, item):
         commit_sha = item.data(0, Qt.UserRole)
         owner = self.owner_entry.text()
         repo = self.repo_entry.text()
+
+        # Reset the background color of all items
+        for i in range(self.commit_tree.topLevelItemCount()):
+            self.commit_tree.topLevelItem(i).setBackground(0, QColor("white"))
+            self.commit_tree.topLevelItem(i).setBackground(1, QColor("white"))
+            self.commit_tree.topLevelItem(i).setBackground(2, QColor("white"))
+
+        # Animate the background color of the selected item
+        animation = QPropertyAnimation(item.animated_item, b"color")
+        animation.setDuration(500)
+        animation.setStartValue(QColor("white"))
+        animation.setEndValue(QColor("#2E8B57"))
+        animation.setEasingCurve(QEasingCurve.InOutQuad)
+        animation.start()
 
         changes = get_commit_details(owner, repo, commit_sha)
         if changes:
